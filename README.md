@@ -16,4 +16,3 @@ As part of exploring retail demand behavior, this is a full SQL-driven analysis 
 5) What insights can be used to optimize purchasing and restocking strategies?
 
 
-
