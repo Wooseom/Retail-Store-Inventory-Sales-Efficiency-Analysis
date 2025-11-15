@@ -1,0 +1,246 @@
+use secondproject;
+
+select * from retail_utf8 limit 0,100000;
+
+select distinct category 
+from retail_utf8
+order by category;
+
+
+# Before moving forward, check if the tables are imported completely
+show tables;
+
+select * from retail_utf8 limit 0,100000;
+
+# Changing the date format to see more clear date
+
+create or replace view rawdata as
+select coalesce(STR_TO_DATE(`Date`, '%Y-%m-%d'), STR_TO_DATE(`Date`, '%d-%m-%Y'), STR_TO_DATE(`Date`, '%m/%d/%Y'), STR_TO_DATE(`Date`, '%m/%d/%y')) AS `Date`,
+       `Store ID`,
+      `Product ID`,
+      `Category`,
+       `Inventory Level`,
+       `Units Sold`,
+       `Units Ordered`,
+       `Demand Forecast`,
+       `Price`
+       `Weather Condition`,
+       `Seasonality`
+from retail_utf8
+LIMIT 0,100000;
+
+select * from rawdata order by `Product ID` limit 0,100000; # double check if the table are created completely and will be used for visualization analysis
+#--------------------------------------------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# << Seasonal Demand Analysis >>
+# designed to analyze seasonal sales performance and demand forecasting for each product in the retail_store_inventory dataset
+# Identify how sales volume (Units Sold) and predicted demand (Demand Forecast) fluctuate across different seasons — Spring, Summer, Autumn, and Winter
+# compare the average values by product
+# performs season-based aggregation (calculating the average sales and demand forecast for each season separately)
+# combines the four seasonal datasets using the UNION ALL, producing a vertically organized result - Each row represents a product’s performance in a specific season.
+
+select 'Spring' as Season, `Product ID`,
+round(avg(`Units Sold`),2) as Avg_Units_Sold,
+round(avg(`Demand Forecast`),2) as Avg_Demand_Forecast
+from retail_utf8
+where Seasonality like '%Spring%'
+group by `Product ID`
+
+union all
+
+select 'Summer' as Season, `Product ID`,
+round(avg(`Units Sold`),2) as Avg_Units_Sold,
+round(avg(`Demand Forecast`),2) as Avg_Demand_Forecast
+from retail_utf8
+where Seasonality like '%Summer%'
+group by `Product ID`
+
+union all
+
+select 'Autumn' as Season, `Product ID`,
+round(avg(`Units Sold`),2) as Avg_Units_Sold,
+round(avg(`Demand Forecast`),2) as Avg_Demand_Forecast
+from retail_utf8
+where Seasonality like '%Autumn%'
+group by `Product ID`
+
+union all
+
+select 'Winter' as Season, `Product ID`,
+round(avg(`Units Sold`),2) as Avg_Units_Sold,
+round(avg(`Demand Forecast`),2) as Avg_Demand_Forecast
+from retail_utf8
+where Seasonality like '%Winter%'
+group by `Product ID`
+order by `Product ID`, field(Season, 'Spring','Summer','Autumn','Winter');
+
+
+# This query uses conditional aggregation (CASE WHEN) to pivot the data horizontally.
+# calculates average sales and demand forecast for each season within a single query and display all seasonal averages in one row per product.
+
+create or replace view seasonal_avg as
+select `Product ID`,
+round(avg(case when Seasonality = 'Spring' then `Units Sold` end),2) as Avg_Spring_Units_Sold,
+round(avg(case when Seasonality = 'Summer' then `Units Sold` end),2) as Avg_Summer_Units_Sold,
+round(avg(case when Seasonality = 'Autumn' then `Units Sold` end),2) as Avg_Autumn_Units_Sold,
+round(avg(case when Seasonality = 'Winter' then `Units Sold` end),2) as Avg_Winter_Units_Sold,
+round(avg(case when Seasonality = 'Spring' then `Demand Forecast` end),2) as Avg_Spring_Forecast,
+round(avg(case when Seasonality = 'Summer' then `Demand Forecast` end),2) as Avg_Summer_Forecast,
+round(avg(case when Seasonality = 'Autumn' then `Demand Forecast` end),2) as Avg_Autumn_Forecast,
+round(avg(case when Seasonality = 'Winter' then `Demand Forecast` end),2) as Avg_Winter_Forecast
+from retail_utf8
+group by `Product ID`
+order by `Product ID`;
+
+select * from seasonal_avg order by `Product ID` limit 200;
+
+# * identifies which season is the best-performing (peak) season for each product.
+# 1) It helps businesses understand seasonal demand patterns, which can be used for:
+# 2) Inventory planning: stocking more items before the peak season
+# 3) Marketing strategy: targeting promotions in the season when a product performs best
+
+create or replace view peakproduct as
+with SeasonSales as (
+select `Product ID`,
+Seasonality,
+round(avg(`Units Sold`),2) as Avg_Units_Sold
+from retail_utf8
+where Seasonality in ('Spring','Summer','Autumn','Winter')
+group by `Product ID`,Seasonality
+),
+Ranking as (
+select `Product ID`,
+Seasonality,
+Avg_Units_Sold,
+rank() over (partition by `Product ID` order by Avg_Units_Sold desc) as SalesRank
+from SeasonSales
+)
+
+select `Product ID`,
+Seasonality as Peak_Season,
+Avg_Units_Sold as Peak_Sales
+from Ranking
+where SalesRank = 1
+order by `Product ID`;
+
+select * from peakproduct order by `Product ID` limit 200;
+
+#-------------------------------------------------------------------------------------------------------------------------
+# measures how efficiently orders are fulfilled or converted into sales throughout the year.
+# It provides valuable insight into seasonal performance and operational efficiency, helping businesses to:
+# 1) Identify which seasons show stronger sales fulfillment (higher sales conversion rate)
+# 2) Detect inefficiencies or fulfillment gaps (lower conversion rate) in certain periods
+# 3) Support forecasting, supply chain planning, and inventory control based on order-to-sale ratios
+
+create or replace view sales_efficiency as
+with SeasonSales as ( 
+                 select `Product ID`, 
+                  Seasonality, 
+                        sum(`Units Sold`) as Total_Units_Sold 
+             from retail_utf8
+                 where Seasonality in ('Spring','Summer','Autumn','Winter') 
+                 group by `Product ID`,Seasonality ), 
+                 
+    TotalOrder as ( 
+             select `Product ID`, 
+                        Seasonality, 
+                        sum(`Units Ordered`) as Total_Units_Ordered 
+             from retail_utf8
+                 where Seasonality in ('Spring','Summer','Autumn','Winter') 
+                 group by `Product ID`,Seasonality ) 
+                 
+select s.`Product ID`, 
+       s.Seasonality, 
+       concat(round((s.Total_Units_Sold/ nullif(t.Total_Units_Ordered, 0)) * 100 ,2),'%') as Sales_Percent 
+from SeasonSales s 
+      left join TotalOrder t on 
+      s.`Product ID` = t.`Product ID` and 
+      s.Seasonality = t.Seasonality
+order by `Product ID`;
+
+select * from sales_efficiency order by `Product ID` limit 200;
+
+# evaluate how accurate the company’s demand forecasts were compared to actual sales
+# It provides meaningful insights for improving forecasting models, production planning, and inventory management
+# Identify over-forecasted products (accuracy < 100%) — actual sales lower than expected
+# Identify under-forecasted products (accuracy > 100%) — actual sales exceeded expectations
+# Improve future demand prediction accuracy by season
+# Support strategic decisions in procurement, logistics, and sales planning
+create or replace view sales_accuracy as
+with SeasonSales as ( 
+                 select `Product ID`, 
+                  Seasonality, 
+                        sum(`Units Sold`) as Total_Units_Sold 
+             from retail_utf8
+                 where Seasonality in ('Spring','Summer','Autumn','Winter') 
+                 group by `Product ID`,Seasonality ), 
+                 
+    TotalDemandForecast as ( 
+             select `Product ID`, 
+                        Seasonality, 
+                        sum(`Demand Forecast`) as Total_DemandForecast 
+             from retail_utf8
+                 where Seasonality in ('Spring','Summer','Autumn','Winter') 
+                 group by `Product ID`,Seasonality ) 
+                 
+select s.`Product ID`, 
+       s.Seasonality, 
+       concat(round((s.Total_Units_Sold/ nullif(t.Total_DemandForecast, 0)) * 100 ,2),'%') as Sales_Accuracy 
+from SeasonSales s 
+      left join TotalDemandForecast t on 
+      s.`Product ID` = t.`Product ID` and 
+      s.Seasonality = t.Seasonality
+order by `Product ID`;
+
+select * from sales_accuracy order by `Product ID` limit 200;
+
+# Inventory Health Check
+# Inventory_Level > Demand_Forecast * 1.5 → Overstock
+# Inventory_Level < Demand_Forecast * 0.8 → Lowstock
+
+create or replace view inventory_health as
+select `Product ID`, 
+       sum(`Inventory Level`) as `Total Inventory`,
+       cast(sum(`Demand Forecast`) as signed) as `Total Demand Forecast`,
+       `Seasonality`,
+       case when sum(`Inventory Level`) > sum(`Demand Forecast`) * 1.5 then 'Overstock'
+            when sum(`Inventory Level`) < sum(`Demand Forecast`) * 0.8 then 'Lowstock'
+            else 'Balanced'
+      end as `Inventory Status`
+from retail_utf8
+where `Seasonality` in ('Spring','Summer', 'Autumn', 'Winter')
+group by `Product ID`, `Seasonality`
+order by `Product ID`, field(`Seasonality`,'Spring','Summer','Autumn','Winter');
+
+select * from inventory_health order by `Product ID`limit 200;
+
+# evaluate how efficiently inventory is being converted into sales, which is crucial for operational performance analysis and inventory optimization
+
+# 1) Identify high-efficiency seasons (Operation Efficiency > 100%), indicating strong sales utilization
+# 2) Detect low-efficiency seasons (Operation Efficiency < 100%), suggesting overstocking or slow sales
+# 3) Compare performance by product and season to improve production planning, stock management, and pricing strategy
+# 4) Support decisions on resource allocation and inventory turnover improvement
+
+create or replace view operation_efficiency as 
+with InventoryPrice as (
+                     select `Product ID`,
+                            SUM(`Inventory Level`) as `Total Inventory QTY`,
+                            SUM(`Units Sold`) as `Sold QTY`,
+                            SUM(`Inventory Level` * `Price`) as `Inventory Value`,
+                            SUM(`Units Sold` * `Price`) as `Sales Value`,
+                            `Seasonality`
+                from retail_utf8
+                     where `Seasonality` in ('Spring', 'Summer', 'Autumn', 'Winter')
+                     group by `Product ID`, `Seasonality`
+                     )
+
+select
+  `Product ID`,
+  `Seasonality`,
+  ROUND(`Inventory Value`, 2) as `Inventory Value`,
+  ROUND(`Sales Value`, 2)     as `Sales Value`,
+  CONCAT(ROUND((`Sales Value` / NULLIF(`Inventory Value`,0) * 100), 2), '%') AS `Operation Efficiency`
+from InventoryPrice
+order by `Product ID`, field(`Seasonality`, 'Spring','Summer','Autumn','Winter');
+
+select * from operation_efficiency order by `Product ID`limit 200;
